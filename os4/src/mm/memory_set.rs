@@ -59,13 +59,26 @@ impl MemorySet {
             None,
         );
     }
-    fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
+    pub fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
         map_area.map(&mut self.page_table);
         if let Some(data) = data {
             map_area.copy_data(&mut self.page_table, data);
         }
         self.areas.push(map_area);
     }
+
+    pub fn pop(&mut self, vpn_range: VPNRange){
+        for vpn in vpn_range{
+            for area in &mut self.areas{
+                if area.data_frames.contains_key(&vpn){
+                    area.unmap_one(&mut self.page_table, vpn);
+                }
+            }
+        }
+
+        self.areas.drain_filter(|area| area.data_frames.is_empty());
+    }
+
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
         self.page_table.map(
@@ -216,6 +229,37 @@ impl MemorySet {
     }
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.page_table.translate(vpn)
+    }
+
+    pub fn any_vpn_mapped(&self, vpn_range: VPNRange) -> bool{
+        for vpn in vpn_range{
+            for map_area in &self.areas{
+                if map_area.data_frames.contains_key(&vpn){
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    pub fn all_vpn_mapped(&self, vpn_range: VPNRange) -> bool{
+        for vpn in vpn_range{
+            let mut mapped = false;
+
+            for map_area in &self.areas{
+                if map_area.data_frames.contains_key(&vpn) {
+                    mapped = true;
+                    break;
+                }
+            }
+
+            if !mapped{
+                return false;
+            }
+        }
+
+        true
     }
 }
 

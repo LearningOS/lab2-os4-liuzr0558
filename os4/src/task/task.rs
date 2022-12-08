@@ -4,6 +4,8 @@ use crate::config::{kernel_stack_position, TRAP_CONTEXT};
 use crate::mm::{MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::trap::{trap_handler, TrapContext};
 
+use crate::config::SUPPORTED_SYSCALL_NUM;
+
 /// task control block structure
 pub struct TaskControlBlock {
     pub task_status: TaskStatus,
@@ -11,6 +13,8 @@ pub struct TaskControlBlock {
     pub memory_set: MemorySet,
     pub trap_cx_ppn: PhysPageNum,
     pub base_size: usize,
+    pub syscall_times: [(usize, usize); SUPPORTED_SYSCALL_NUM],
+    pub first_run_time: Option<usize>,
 }
 
 impl TaskControlBlock {
@@ -41,6 +45,8 @@ impl TaskControlBlock {
             memory_set,
             trap_cx_ppn,
             base_size: user_sp,
+            syscall_times: [(0,0); SUPPORTED_SYSCALL_NUM],
+            first_run_time: None,
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -62,4 +68,10 @@ pub enum TaskStatus {
     Ready,
     Running,
     Exited,
+}
+
+pub struct KernelTaskInfo{
+    pub status: TaskStatus,
+    pub syscall_times: [(usize, usize); SUPPORTED_SYSCALL_NUM],
+    pub running_time: usize,
 }

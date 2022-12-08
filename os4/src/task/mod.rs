@@ -20,9 +20,11 @@ use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
 pub use switch::__switch;
-pub use task::{TaskControlBlock, TaskStatus};
+pub use task::{TaskControlBlock, TaskStatus, KernelTaskInfo};
 
 pub use context::TaskContext;
+use crate::mm::{MapArea, MapPermission, MapType, VirtAddr, VPNRange};
+use crate::timer::get_time_us;
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -79,6 +81,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        next_task.first_run_time = Some(get_time_us());
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -134,6 +137,12 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            let next_task = &mut inner.tasks[next];
+
+            if next_task.first_run_time.is_none(){
+                next_task.first_run_time = Some(get_time_us());
+            }
+
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -146,6 +155,64 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    fn increase_task_syscall_count(&self, syscall_id: usize){
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+
+        for (call_id, call_times) in &mut inner.tasks[current].syscall_times{
+            if *call_id == syscall_id{
+                *call_times += 1;
+                break;
+            }else{
+                if *call_id == 0 && *call_times == 0{
+                    *call_id = syscall_id;
+                    *call_times += 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    fn get_task_task_info(&self) -> KernelTaskInfo{
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let current_time = get_time_us();
+        let start_time = inner.tasks[current].first_run_time
+            .expect("Why task is running but start time is None!");
+
+        KernelTaskInfo{
+            status: inner.tasks[current].task_status,
+            syscall_times: inner.tasks[current].syscall_times,
+            running_time: (current_time - start_time) / 1000,
+        }
+    }
+
+    fn any_vpn_mapped(&self, vpn_range: VPNRange) -> bool{
+        let inner = self.inner.exclusive_access();
+        let current_task = &inner.tasks[inner.current_task];
+        current_task.memory_set.any_vpn_mapped(vpn_range)
+    }
+
+    fn all_vpn_mapped(&self, vpn_range: VPNRange) -> bool{
+        let inner = self.inner.exclusive_access();
+        let current_task = &inner.tasks[inner.current_task];
+        current_task.memory_set.all_vpn_mapped(vpn_range)
+    }
+
+    fn map_in_current(&self, va_start: VirtAddr, va_end: VirtAddr, permit: MapPermission){
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let current_task = &mut inner.tasks[current];
+        current_task.memory_set.push(MapArea::new(va_start, va_end, MapType::Framed, permit), None);
+    }
+
+    fn unmap_in_current(&self, vpn_range: VPNRange){
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let current_task = &mut inner.tasks[current];
+        current_task.memory_set.pop(vpn_range);
     }
 }
 
@@ -191,3 +258,28 @@ pub fn current_user_token() -> usize {
 pub fn current_trap_cx() -> &'static mut TrapContext {
     TASK_MANAGER.get_current_trap_cx()
 }
+
+pub fn increase_task_syscall_count(syscall_id: usize){
+    TASK_MANAGER.increase_task_syscall_count(syscall_id);
+}
+
+pub fn get_current_task_info() -> KernelTaskInfo{
+    TASK_MANAGER.get_task_task_info()
+}
+
+pub fn any_vpn_mapped_in_current(vpn_range: VPNRange) -> bool{
+    TASK_MANAGER.any_vpn_mapped(vpn_range)
+}
+
+pub fn all_vpn_mapped_in_current(vpn_range: VPNRange) -> bool{
+    TASK_MANAGER.all_vpn_mapped(vpn_range)
+}
+
+pub fn map_in_current(va_start: VirtAddr, va_end: VirtAddr, permit: MapPermission){
+    TASK_MANAGER.map_in_current(va_start, va_end, permit);
+}
+
+pub fn unmap_in_current(vpn_range: VPNRange){
+    TASK_MANAGER.unmap_in_current(vpn_range);
+}
+
